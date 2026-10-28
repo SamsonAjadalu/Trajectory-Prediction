@@ -9,6 +9,11 @@ nohup.out
 # Training artifacts
 checkpoints/
 transformer_model/checkpoints/
+mlflow.db
+mlflow-artifacts/
+mlruns/
+mlops/__pycache__/
+serving/__pycache__/
 transformer_model/data/
 
 # Local datasets and archives

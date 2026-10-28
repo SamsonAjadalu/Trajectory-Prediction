@@ -15,7 +15,7 @@ import numpy as np
 from tqdm import tqdm
 
 from model import TransformerTrajectoryPredictor, create_model
-from dataset import load_data, create_dataloaders
+from dataset import load_data, create_dataloaders, resolve_data_dir as resolve_dataset_dir
 
 
 def set_global_seed(seed):
@@ -59,18 +59,8 @@ def bivariate_gaussian_nll(predictions, targets, eps=1e-6):
 
 
 def resolve_data_dir(project_dir, agent):
-    """Resolve the flat per-agent data directory."""
-    candidate = project_dir / 'data' / agent
-    required = ['train_x.pt', 'train_y.pt', 'scene_ids.pt']
-
-    if candidate.exists() and all((candidate / name).exists() for name in required):
-        print(f"Using data dir: {candidate}")
-        return candidate
-
-    missing = [name for name in required if not (candidate / name).exists()]
-    raise FileNotFoundError(
-        f"Missing required data files in {candidate}: {', '.join(missing)}"
-    )
+    """Backward-compatible wrapper for the shared data resolver."""
+    return resolve_dataset_dir(data_dir=None, agent=agent)
 
 
 def compute_metrics(predictions, targets):
@@ -247,7 +237,10 @@ def train(
     d_model=64,
     nhead=8,
     num_layers=4,
-    seed=42
+    seed=42,
+    mlflow_tracking_uri=None,
+    mlflow_experiment='trajectory-transformer',
+    mlflow_run_name=None,
 ):
     """
     Full training pipeline.
@@ -268,6 +261,15 @@ def train(
         seed: Random seed for reproducible training
     """
     set_global_seed(seed)
+
+    mlflow_run = None
+    mlflow = None
+    if mlflow_tracking_uri:
+        import mlflow as _mlflow
+        mlflow = _mlflow
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment(mlflow_experiment)
+        mlflow_run = mlflow.start_run(run_name=mlflow_run_name)
     print(f"Random seed: {seed}")
 
     # Setup device
@@ -289,11 +291,7 @@ def train(
     print(f"Checkpoint directory: {checkpoint_dir}")
     print(f"Experiment: agent={agent}, features={features}")
 
-    if data_dir is None:
-        data_dir = resolve_data_dir(project_dir, agent)
-    else:
-        data_dir = Path(data_dir)
-        print(f"Using explicit data dir: {data_dir}")
+    data_dir = resolve_dataset_dir(data_dir=data_dir, agent=agent)
     
     # Load data
     print("\nLoading data...")
@@ -352,6 +350,32 @@ def train(
     )
     criterion = bivariate_gaussian_nll if is_probabilistic else nn.MSELoss()
     print(f"Loss function: {'BivariateGaussianNLL' if is_probabilistic else 'MSELoss'}")
+
+    if mlflow_run:
+        mlflow.log_params({
+            'agent': agent,
+            'features': features,
+            'seed': seed,
+            'num_epochs': num_epochs,
+            'batch_size': batch_size,
+            'learning_rate': learning_rate,
+            'd_model': d_model,
+            'nhead': nhead,
+            'num_layers': num_layers,
+            'num_input_frames': num_input_frames,
+            'num_input_features': num_input_features,
+            'num_output_frames': num_output_frames,
+            'num_output_features': num_output_features,
+            'train_samples': len(train_idx),
+            'test_samples': len(test_idx),
+            'train_scene_cutoff': 700,
+        })
+        mlflow.set_tags({
+            'feature_configuration': features,
+            'data_dir': str(data_dir),
+            'architecture': 'temporal_tokens_v2',
+            'device': str(device),
+        })
     
     # Training loop
     print(f"\nTraining for {num_epochs} epochs...\n")
@@ -371,6 +395,7 @@ def train(
     
     best_val_loss = float('inf')
     best_epoch = 0
+    best_state_dict = None
     
     start_time = time.time()
     
@@ -406,11 +431,25 @@ def train(
         # Append CSV row for easy spreadsheet/report usage
         with open(csv_metrics_path, 'a') as f:
             f.write(f"{epoch + 1},{train_metrics['loss']},{val_metrics['loss']}\n")
+
+        if mlflow_run:
+            mlflow.log_metrics({
+                'train_loss': train_metrics['loss'],
+                'train_ade': train_metrics['ade'],
+                'train_fde': train_metrics['fde'],
+                'val_loss': val_metrics['loss'],
+                'val_ade': val_metrics['ade'],
+                'val_fde': val_metrics['fde'],
+            }, step=epoch + 1)
         
         # Save best model
         if val_metrics['loss'] < best_val_loss:
             best_val_loss = val_metrics['loss']
             best_epoch = epoch + 1
+            best_state_dict = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
             
             checkpoint = {
                 'epoch': epoch + 1,
@@ -479,6 +518,31 @@ def train(
     print(f"Checkpoints saved to: {checkpoint_dir}")
     print(f"CSV metrics saved to: {csv_metrics_path}")
     print(f"{'='*80}")
+
+    if mlflow_run:
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+            model.to(device)
+            model.eval()
+        mlflow.log_artifact(str(checkpoint_dir / 'best_model.pt'), artifact_path='checkpoints')
+        mlflow.log_artifact(str(checkpoint_dir / 'training_history.json'), artifact_path='metrics')
+        mlflow.log_artifact(str(csv_metrics_path), artifact_path='metrics')
+        mlflow.log_metrics({
+            'best_val_loss': best_val_loss,
+            'best_val_ade': history['val_ade'][best_epoch - 1],
+            'best_val_fde': history['val_fde'][best_epoch - 1],
+        })
+        mlflow.pytorch.log_model(
+            model,
+            artifact_path='model',
+            code_paths=[str(Path(__file__).with_name('model.py'))],
+            metadata={'features': features, 'architecture': 'temporal_tokens_v2'},
+        )
+        mlflow.set_tag('best_epoch', str(best_epoch))
+        mlflow.set_tag('best_val_loss', str(best_val_loss))
+        mlflow_run_id = mlflow_run.info.run_id
+        mlflow.end_run()
+        print(f"MLflow run: {mlflow_run_id}")
     
     return model, history
 
@@ -503,6 +567,9 @@ if __name__ == '__main__':
                         help='Single random seed for training (default: 42)')
     parser.add_argument('--seeds', type=str, default=None,
                         help='Comma-separated seeds to run sequentially, e.g. 42,123')
+    parser.add_argument('--mlflow-tracking-uri', type=str, default=None)
+    parser.add_argument('--mlflow-experiment', type=str, default='trajectory-transformer')
+    parser.add_argument('--mlflow-run-name', type=str, default=None)
     args = parser.parse_args()
 
     seeds = [args.seed]
@@ -533,4 +600,7 @@ if __name__ == '__main__':
             nhead=args.nhead,
             num_layers=args.num_layers,
             seed=run_seed,
+            mlflow_tracking_uri=args.mlflow_tracking_uri,
+            mlflow_experiment=args.mlflow_experiment,
+            mlflow_run_name=args.mlflow_run_name,
         )

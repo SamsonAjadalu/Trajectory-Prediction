@@ -64,7 +64,8 @@ class TransformerTrajectoryPredictor(nn.Module):
         num_layers=4,        # Number of transformer encoder layers
         dim_feedforward=256,  # Feedforward network dimension
         dropout=0.1,
-        activation='relu'
+        activation='relu',
+        is_probabilistic=False,
     ):
         """
         Args:
@@ -78,6 +79,8 @@ class TransformerTrajectoryPredictor(nn.Module):
             dim_feedforward: Dimension of feedforward network
             dropout: Dropout probability
             activation: Activation function
+            is_probabilistic: Emit five bivariate-Gaussian parameters per
+                future frame instead of two position coordinates.
         """
         super().__init__()
         
@@ -86,8 +89,10 @@ class TransformerTrajectoryPredictor(nn.Module):
         self.num_output_frames = num_output_frames
         self.num_input_features = num_input_features
         self.num_output_features = num_output_features
+        self.is_probabilistic = is_probabilistic
         self.input_dim = num_input_frames * num_input_features
-        self.output_dim = num_output_frames * num_output_features
+        self.model_output_features = 5 if is_probabilistic else num_output_features
+        self.output_dim = num_output_frames * self.model_output_features
         self.d_model = d_model
         
         # Input embedding layer: projects each frame independently to embedding dimension.
@@ -151,7 +156,7 @@ class TransformerTrajectoryPredictor(nn.Module):
         output = self.output_head(sequence_summary)
 
         # Reshape to trajectory format: (batch, T * F_out) -> (batch, T, F_out)
-        output = output.reshape(batch_size, self.num_output_frames, self.num_output_features)
+        output = output.reshape(batch_size, self.num_output_frames, self.model_output_features)
         
         return output
 

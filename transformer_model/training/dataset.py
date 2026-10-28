@@ -8,6 +8,31 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 
 
+REQUIRED_DATA_FILES = ('train_x.pt', 'train_y.pt', 'scene_ids.pt')
+
+
+def resolve_data_dir(data_dir=None, agent='car'):
+    """Resolve either the historical per-agent or preserved flat data layout."""
+    script_dir = Path(__file__).parent
+    project_dir = script_dir.parent
+
+    if data_dir is not None:
+        resolved = Path(data_dir).expanduser().resolve()
+        candidates = [resolved]
+    else:
+        candidates = [project_dir / 'data' / agent, project_dir / 'data']
+
+    for candidate in candidates:
+        if all((candidate / name).exists() for name in REQUIRED_DATA_FILES):
+            print(f"Using data dir: {candidate}")
+            return candidate
+
+    searched = ', '.join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Missing required data files ({', '.join(REQUIRED_DATA_FILES)}); searched: {searched}"
+    )
+
+
 class TrajectoryDataset(Dataset):
     """PyTorch Dataset for trajectory prediction."""
     
@@ -45,20 +70,7 @@ def load_data(data_dir=None, agent='car', features='baseline', device='cpu'):
     Returns:
         Tuple of (train_x, train_y, scene_ids) as tensors on specified device
     """
-    script_dir = Path(__file__).parent
-    project_dir = script_dir.parent
-
-    if data_dir is None:
-        data_dir = project_dir / 'data' / agent
-    else:
-        data_dir = Path(data_dir)
-
-    required = ['train_x.pt', 'train_y.pt', 'scene_ids.pt']
-    missing = [name for name in required if not (data_dir / name).exists()]
-    if missing:
-        raise FileNotFoundError(
-            f"Missing required data files in {data_dir}: {', '.join(missing)}"
-        )
+    data_dir = resolve_data_dir(data_dir=data_dir, agent=agent)
     
     # Load position data (always required)
     train_x = torch.load(data_dir / 'train_x.pt', weights_only=True).to(device)

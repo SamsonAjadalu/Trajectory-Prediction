@@ -13,7 +13,7 @@ import math
 from tqdm import tqdm
 
 from model import TransformerTrajectoryPredictor, LegacyFlattenedTransformerTrajectoryPredictor
-from dataset import load_data, create_dataloaders
+from dataset import load_data, create_dataloaders, resolve_data_dir as resolve_dataset_dir
 
 
 def bivariate_gaussian_nll(predictions, targets, eps=1e-6):
@@ -43,18 +43,8 @@ def bivariate_gaussian_nll(predictions, targets, eps=1e-6):
 
 
 def resolve_data_dir(project_dir, agent):
-    """Resolve the flat per-agent data directory."""
-    candidate = project_dir / 'data' / agent
-    required = ['train_x.pt', 'train_y.pt', 'scene_ids.pt']
-
-    if candidate.exists() and all((candidate / name).exists() for name in required):
-        print(f"Using data dir: {candidate}")
-        return candidate
-
-    missing = [name for name in required if not (candidate / name).exists()]
-    raise FileNotFoundError(
-        f"Missing required data files in {candidate}: {', '.join(missing)}"
-    )
+    """Backward-compatible wrapper for the shared data resolver."""
+    return resolve_dataset_dir(data_dir=None, agent=agent)
 
 
 def save_trajectory_plot(history, ground_truth, prediction, index, output_dir):
