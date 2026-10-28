@@ -1,25 +1,31 @@
 # Python artifacts
 __pycache__/
 *.py[cod]
-*.pyc
-
-# Datasets and processed artifacts
-data/
-processed/
-transformer_model/data/
-extra/nuscenes_data/
-nuscenes_data/
-*.pt
-*.tgz
-*.zip
 
 # Logs and local runtime outputs
 *.log
 nohup.out
 
+# Datasets and processed artifacts
+data/
+processed/
+*.pt
+
 # Training artifacts
 checkpoints/
 transformer_model/checkpoints/
+mlflow.db
+mlflow-artifacts/
+mlruns/
+mlops/__pycache__/
+serving/__pycache__/
+transformer_model/data/
+
+# Local datasets and archives
+extra/nuscenes_data/
+nuscenes_data/
+*.tgz
+*.zip
 
 # Local-only docs/notes
 SUMMARY.md
@@ -31,9 +37,9 @@ CHANGELOG.md
 # Local migration safety backups
 _migration_backups/
 
-# Editor and OS
+# Editor and operating-system files
 .vscode/
 .DS_Store
 
-# Legacy local workspace (do not track)
+# Legacy local workspace
 extra/
